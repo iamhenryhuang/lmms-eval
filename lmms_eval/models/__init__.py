@@ -95,6 +95,7 @@ AVAILABLE_SIMPLE_MODELS = {
     "qwen_image_edit": "QwenImageEdit",
     "qwen3_omni": "Qwen3_Omni",
     "qwen3_vl": "Qwen3_VL",
+    "qwen3_vl_native_video": "Qwen3_VL_NativeVideo",
     "qwen3_5": "Qwen3_5",
     "reka": "Reka",
     "ross": "Ross",
