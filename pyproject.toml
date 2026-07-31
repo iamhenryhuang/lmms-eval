@@ -36,8 +36,8 @@ dependencies = [
     "pytablewriter",
     "sacrebleu>=1.5.0",
     "scikit-learn>=0.24.1",
-    "torch>=2.1.0", # to enable sdpa mode for running 34B model on one 80GB GPU
-    "torchvision>=0.16.0",
+    "torch==2.5.1",
+    "torchvision==0.20.1",
     "timm",
     "einops",
     "ftfy",
@@ -227,3 +227,12 @@ markers = [
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu121" }
+torchvision = { index = "pytorch-cu121" }
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
