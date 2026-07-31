@@ -33,11 +33,26 @@ High 與 Low 使用相同影片內容及相同人工 GT。Low 的視訊設定為
 
 ## 3. 建立 Low 與配對標註
 
-將所有 `1920×1080` 原片轉成 Low；已存在的輸出會自動略過：
+### High 選擇方式
+
+- 使用 `ffprobe` 檢查原始 MP4/MKV 的第一條視訊串流。
+- 只選 coded resolution **剛好為 `1920×1080`** 的影片，共 80 支。
+- `paired/high` 使用 symbolic links 指向原片，不重新編碼，因此保留原始畫質、
+  FPS、bitrate、容器及音訊。
+
+### Low 轉換方式
+
+將上述 Full HD 原片轉成 Low；已存在的輸出會自動略過：
 
 ```bash
 python data/convert_fhd_to_low.py
 ```
+
+轉換時保留原始長寬比，必要時補黑邊至 `432×240`，不主動變更 FPS；輸出統一為
+MP4、H.264、約 `400 kbps`、YUV 4:2:0，音訊為 AAC、約 `96 kbps`。原片不會被
+覆寫，High 與 Low 使用相同檔名 stem 進行一對一配對。
+
+### 配對與 GT
 
 根據 `paired/high`、`paired/low` 和原始 Parquet 建立 80 筆配對標註：
 
@@ -45,16 +60,20 @@ python data/convert_fhd_to_low.py
 python data/build_paired_annotations.py
 ```
 
+腳本會確認 High 與 Low 各有 80 支、檔名完全對應，而且每支影片都能在原始
+Parquet 找到 question 與 GT；兩種解析度共用同一組 question 和 GT。
+
 ## 4. 模型與影片輸入方式
 
-目前使用兩個模型：
+目前使用三個模型：
 
 ```text
 Baseline：Qwen/Qwen3-VL-4B-Instruct
 較新模型：Qwen/Qwen3.5-4B
+較大模型：Qwen/Qwen3.5-9B
 ```
 
-兩者都透過自訂的 `qwen3_vl_native_video` wrapper 執行：
+三者都透過自訂的 `qwen3_vl_native_video` wrapper 執行：
 
 ```text
 lmms_eval/models/simple/qwen3_vl_native_video.py
@@ -110,6 +129,26 @@ python -m lmms_eval \
   --output_path outputs/qwen35_4b_native_resolution_full80
 ```
 
+### Qwen3.5-9B
+
+```bash
+CUDA_VISIBLE_DEVICES=1 \
+NCCL_P2P_DISABLE=1 \
+NCCL_IB_DISABLE=1 \
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+python -m lmms_eval \
+  --model qwen3_vl_native_video \
+  --model_args pretrained=Qwen/Qwen3.5-9B,device_map=auto,attn_implementation=sdpa,native_num_frames=12,enable_thinking=false \
+  --tasks video_resolution_high,video_resolution_low \
+  --batch_size 1 \
+  --predict_only \
+  --log_samples \
+  --output_path outputs/qwen35_9b_native_resolution_full80
+```
+
+Qwen3.5-9B 在 RTX 4090 上執行時約使用 `22081 MiB / 24564 MiB`，因此需維持
+`batch_size=1`、12 frames，並避免同一張 GPU 同時執行其他程式。
+
 每次完整實驗會產生 80 筆 High 與 80 筆 Low 描述，共 160 筆。`--predict_only`
 只產生並保存描述，不在這一步呼叫付費評分 API。
 
@@ -140,6 +179,13 @@ python data/evaluate_video_resolution_outputs.py \
   outputs/qwen35_4b_native_resolution_full80
 ```
 
+評分 Qwen3.5-9B：
+
+```bash
+python data/evaluate_video_resolution_outputs.py \
+  outputs/qwen35_9b_native_resolution_full80
+```
+
 評分會逐筆保存並支援中斷續跑。結果位於各實驗目錄下：
 
 ```text
@@ -157,13 +203,30 @@ jq '.averages' outputs/<實驗目錄>/gpt_eval_scores.json
 ```text
 outputs/qwen3_vl_4b_native_resolution_full80/
 outputs/qwen35_4b_native_resolution_full80/
+outputs/qwen35_9b_native_resolution_full80/
 ```
 
 每個目錄中的 `samples_video_resolution_high.jsonl` 與
 `samples_video_resolution_low.jsonl` 保存逐支影片的模型描述及 GT；
 `gpt_eval_scores.json` 保存逐筆分數與 High/Low 平均分數。
 
-## 8. 下一個推薦資料集：VDC
+## 8. 目前完整 80 支結果
+
+評分模型皆為 `gpt-4o-2024-11-20`，分數範圍為 `0–5`：
+
+| 生成模型 | High | Low | High − Low |
+|---|---:|---:|---:|
+| Qwen3-VL-4B-Instruct | 3.2625 | 2.9000 | 0.3625 |
+| Qwen3.5-4B | 3.4500 | 3.1625 | 0.2875 |
+| Qwen3.5-9B | 3.0125 | 3.0125 | 0.0000 |
+
+Qwen3.5-9B 的逐片配對結果為 High 勝 15 支、Low 勝 15 支、平手 50 支；High
+與 Low 各得 241 分。這表示在目前的 12-frame native-resolution 流程與獨立
+`0–5` 詳細度評分下，9B 沒有呈現整體 High 優於 Low，但個別影片仍有明顯差異。
+此評分主要衡量描述的完整度與具體程度，且 High/Low 是分開評分，因此不能單獨
+代表事實正確性或幻覺程度。
+
+## 9. 下一個推薦資料集：VDC
 
 VDC（Video Detailed Caption）專門評估詳細影片描述，比目前的
 VideoDetailCaption 更貼近本實驗主題。資料集約有 1,027 支影片、總大小約 80 GB，
