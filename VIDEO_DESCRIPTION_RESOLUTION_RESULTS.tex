@@ -1,0 +1,77 @@
+\documentclass[a4paper,11pt]{article}
+
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{booktabs}
+\usepackage{graphicx}
+
+\begin{document}
+
+\begin{table}[!htbp]
+  \centering
+  \caption{Independent VDD Scores Assigned by GPT-4o}
+  \label{tab:vdd-results}
+  \begin{tabular}{lrrr}
+    \toprule
+    Description model & High & Low & High $-$ Low \\
+    \midrule
+    Qwen3-VL-4B-Instruct & 3.2625 & 2.9000 & 0.3625 \\
+    Qwen3.5-4B           & 3.4500 & 3.1625 & 0.2875 \\
+    Qwen3.5-9B           & 3.0125 & 3.0125 & 0.0000 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{table}[!htbp]
+  \centering
+  \caption{Two-Pass Pairwise Results with GPT-4o and GPT-5.1 Judges}
+  \label{tab:pairwise-results}
+  \resizebox{\textwidth}{!}{%
+  \begin{tabular}{llrrrr}
+    \toprule
+    Description model
+    & Judge
+    & High wins
+    & Low wins
+    & Tie/conflict
+    & High win rate \\
+    \midrule
+    Qwen3-VL-4B-Instruct & GPT-4o  & 24 & 12 & 44 & 66.7\% \\
+                         & GPT-5.1 & 35 & 18 & 27 & 66.0\% \\
+    \addlinespace
+    Qwen3.5-4B           & GPT-4o  & 20 &  9 & 51 & 69.0\% \\
+                         & GPT-5.1 & 33 & 14 & 33 & 70.2\% \\
+    \addlinespace
+    Qwen3.5-9B           & GPT-4o  & 19 & 17 & 44 & 52.8\% \\
+                         & GPT-5.1 & 33 & 19 & 28 & 63.5\% \\
+    \bottomrule
+  \end{tabular}
+  }
+\end{table}
+
+\noindent
+Three description models were evaluated on the same 80 paired videos. Each pair contains
+the original 1920$\times$1080 video as High and a 432$\times$240 version as Low, with the
+same prompt, reference answer, and 12 uniformly sampled frames.
+
+\medskip
+\noindent
+Two evaluation methods were used. First, the VDD evaluator independently assigned each
+description a detail-orientation score from 0 to 5 using
+\texttt{gpt-4o-2024-11-20}. Second, the pairwise evaluator anonymously compared the High
+and Low descriptions of the same video. Pairwise evaluation was run separately with
+\texttt{gpt-4o-2024-11-20} and \texttt{gpt-5.1-2025-11-13}. Every pair was evaluated
+twice with Candidate A and Candidate B reversed. A resolution was counted as the winner
+only when both orders selected it; every tie or order disagreement was classified as
+Tie/conflict. High win rate excludes Tie/conflict cases.
+
+\medskip
+\noindent
+The VDD scores favor High resolution for both 4B models but show no difference for
+Qwen3.5-9B. In the pairwise results, both judges select High more often than Low for all
+three description models, although the GPT-4o result for Qwen3.5-9B is nearly even.
+GPT-5.1 resolves more comparisons, producing fewer Tie/conflict outcomes and a clearer
+High-resolution advantage for Qwen3.5-9B. Overall, High resolution provides a consistent
+but moderate benefit rather than a universal improvement; under GPT-5.1, 35--41\% of the
+videos still remain ties or order conflicts.
+
+\end{document}
