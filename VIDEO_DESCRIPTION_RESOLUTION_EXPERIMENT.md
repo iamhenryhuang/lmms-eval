@@ -79,10 +79,10 @@ Baseline：Qwen/Qwen3-VL-4B-Instruct
 lmms_eval/models/simple/qwen3_vl_native_video.py
 ```
 
-原始 12-frame 實驗的共同設定（後續 24-frame 實驗見第 8 節）：
+目前主要 24-frame 實驗的共同設定（背景與 pixel 預算見第 8 節）：
 
 - 單張 GPU 1
-- 每支影片均勻抽取 12 frames
+- 每支影片均勻抽取 24 frames
 - High 保留 1920×1080，Low 保留 432×240
 - `batch_size=1`
 - `max_new_tokens=768`
@@ -97,39 +97,53 @@ lmms_eval/tasks/video_resolution_description/
 
 ## 5. 產生 80 組影片描述
 
-### Qwen3-VL-4B baseline
+以下是目前主要的 24-frame 生成指令。資料、prompt、GT、`batch_size` 與
+`temperature` 均保持一致，pixel 預算計算見第 8 節。
+
+### 5.1 24-frame（目前主要設定）
+
+兩個 4B 模型加抽為 24 frames，並將 `native_max_total_pixels` 提高到
+`50331648`，讓 24 張 Full HD frame 不會被降尺寸。Qwen3.5-9B 在此設定下 OOM，
+因此僅保留 12-frame 結果（見第 8 節）。
+
+#### Qwen3-VL-4B baseline
 
 ```bash
 CUDA_VISIBLE_DEVICES=1 \
 NCCL_P2P_DISABLE=1 \
 NCCL_IB_DISABLE=1 \
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
 python -m lmms_eval \
   --model qwen3_vl_native_video \
-  --model_args pretrained=Qwen/Qwen3-VL-4B-Instruct,device_map=auto,attn_implementation=sdpa,native_num_frames=12 \
+  --model_args pretrained=Qwen/Qwen3-VL-4B-Instruct,device_map=auto,attn_implementation=sdpa,native_num_frames=24,native_max_total_pixels=50331648 \
   --tasks video_resolution_high,video_resolution_low \
   --batch_size 1 \
   --predict_only \
   --log_samples \
-  --output_path outputs/qwen3_vl_4b_native_resolution_full80
+  --output_path outputs/qwen3_vl_4b_native_24f_resolution_full80
 ```
 
-### Qwen3.5-4B
+#### Qwen3.5-4B
 
 ```bash
 CUDA_VISIBLE_DEVICES=1 \
 NCCL_P2P_DISABLE=1 \
 NCCL_IB_DISABLE=1 \
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
 python -m lmms_eval \
   --model qwen3_vl_native_video \
-  --model_args pretrained=Qwen/Qwen3.5-4B,device_map=auto,attn_implementation=sdpa,native_num_frames=12,enable_thinking=false \
+  --model_args pretrained=Qwen/Qwen3.5-4B,device_map=auto,attn_implementation=sdpa,native_num_frames=24,native_max_total_pixels=50331648,enable_thinking=false \
   --tasks video_resolution_high,video_resolution_low \
   --batch_size 1 \
   --predict_only \
   --log_samples \
-  --output_path outputs/qwen35_4b_native_resolution_full80
+  --output_path outputs/qwen35_4b_native_24f_resolution_full80
 ```
 
-### Qwen3.5-9B
+### 5.2 Qwen3.5-9B（12-frame 補充設定）
+
+Qwen3.5-9B 無法在單張 RTX 4090 上負荷相同的 24-frame Full HD 設定，因此維持
+12 frames，僅作為補充結果，不與兩個 4B 模型的 24-frame 主結果直接比較。
 
 ```bash
 CUDA_VISIBLE_DEVICES=1 \
@@ -145,9 +159,6 @@ python -m lmms_eval \
   --log_samples \
   --output_path outputs/qwen35_9b_native_resolution_full80
 ```
-
-Qwen3.5-9B 在 RTX 4090 上執行時約使用 `22081 MiB / 24564 MiB`，因此需維持
-`batch_size=1`、12 frames，並避免同一張 GPU 同時執行其他程式。
 
 每次完整實驗會產生 80 筆 High 與 80 筆 Low 描述，共 160 筆。`--predict_only`
 只產生並保存描述，不在這一步呼叫付費評分 API。
@@ -176,21 +187,14 @@ GT 重點涵蓋程度與描述具體程度。High/Low 是兩次獨立 API 呼叫
 
 ```bash
 python data/evaluate_video_resolution_outputs.py \
-  outputs/qwen3_vl_4b_native_resolution_full80
+  outputs/qwen3_vl_4b_native_24f_resolution_full80
 ```
 
 評分 Qwen3.5-4B：
 
 ```bash
 python data/evaluate_video_resolution_outputs.py \
-  outputs/qwen35_4b_native_resolution_full80
-```
-
-評分 Qwen3.5-9B：
-
-```bash
-python data/evaluate_video_resolution_outputs.py \
-  outputs/qwen35_9b_native_resolution_full80
+  outputs/qwen35_4b_native_24f_resolution_full80
 ```
 
 評分會逐筆保存並支援中斷續跑。結果位於各實驗目錄下：
@@ -222,21 +226,14 @@ Pairwise 評分 Qwen3-VL-4B：
 
 ```bash
 python data/evaluate_video_resolution_pairwise.py \
-  outputs/qwen3_vl_4b_native_resolution_full80
+  outputs/qwen3_vl_4b_native_24f_resolution_full80
 ```
 
 Pairwise 評分 Qwen3.5-4B：
 
 ```bash
 python data/evaluate_video_resolution_pairwise.py \
-  outputs/qwen35_4b_native_resolution_full80
-```
-
-Pairwise 評分 Qwen3.5-9B：
-
-```bash
-python data/evaluate_video_resolution_pairwise.py \
-  outputs/qwen35_9b_native_resolution_full80
+  outputs/qwen35_4b_native_24f_resolution_full80
 ```
 
 每完成一筆就會原子寫入進度，中斷後使用同一指令即可跳過已完成項目。結果位於：
@@ -270,13 +267,12 @@ jq '.consensus_summary' outputs/<實驗目錄>/gpt_pairwise_scores.json
 `max_completion_tokens=200`、`reasoning_effort=none`。原本 GPT-4o 結果不會被
 覆蓋。
 
-三組完整結果可依序執行：
+兩組 24-frame 完整結果可依序執行：
 
 ```bash
 for experiment in \
-  outputs/qwen35_4b_native_resolution_full80 \
-  outputs/qwen35_9b_native_resolution_full80 \
-  outputs/qwen3_vl_4b_native_resolution_full80
+  outputs/qwen3_vl_4b_native_24f_resolution_full80 \
+  outputs/qwen35_4b_native_24f_resolution_full80
 do
   MODEL_VERSION=gpt-5.1-2025-11-13 \
   python data/evaluate_video_resolution_pairwise.py \
