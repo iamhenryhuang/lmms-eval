@@ -112,9 +112,16 @@ def get_eval_generic(question, answer, pred, max_tokens: int, retries: int = 5):
         "model": GPT_EVAL_MODEL_NAME,
         "messages": messages,
         "temperature": 0,
-        "max_tokens": max_tokens,
         # "response_format": {"type": "json_object"},
     }
+
+    # GPT-5 models use max_completion_tokens. Keep max_tokens for older
+    # judges such as GPT-4o so existing VDD evaluation commands remain valid.
+    if GPT_EVAL_MODEL_NAME.lower().startswith("gpt-5"):
+        payload["max_completion_tokens"] = max_tokens
+        payload["reasoning_effort"] = "none"
+    else:
+        payload["max_tokens"] = max_tokens
 
     for attempt in range(retries):
         try:
