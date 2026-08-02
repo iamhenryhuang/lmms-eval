@@ -79,7 +79,7 @@ Baseline：Qwen/Qwen3-VL-4B-Instruct
 lmms_eval/models/simple/qwen3_vl_native_video.py
 ```
 
-共同設定：
+原始 12-frame 實驗的共同設定（後續 24-frame 實驗見第 8 節）：
 
 - 單張 GPU 1
 - 每支影片均勻抽取 12 frames
@@ -298,6 +298,8 @@ outputs/<實驗目錄>/gpt_pairwise_scores_gpt51.json
 outputs/qwen3_vl_4b_native_resolution_full80/
 outputs/qwen35_4b_native_resolution_full80/
 outputs/qwen35_9b_native_resolution_full80/
+outputs/qwen3_vl_4b_native_24f_resolution_full80/
+outputs/qwen35_4b_native_24f_resolution_full80/
 ```
 
 每個目錄中的 `samples_video_resolution_high.jsonl` 與
@@ -345,6 +347,104 @@ GPT-5.1 很少在單輪直接回答 Tie，但交換 A/B 後仍有部分判斷不
 評分與嚴格共識是必要的。綜合兩個 judge，較適當的結論是：固定抽取 12 frames 時，
 高解析度通常較容易產生符合 GT 的描述，但整體場景與大型動作在 240p 中仍多半可辨識，
 所以差異屬中等程度，而非壓倒性差距。
+
+事後檢查發現 GPT-4o 有明顯 Candidate A 位置偏誤：三個 12-frame 實驗的 A 勝率分別
+為 `65.6%`、`73.6%`、`70.3%`，皆顯著偏離 50%；GPT-5.1 則未檢出顯著位置偏誤。
+由於第一輪位置已平衡且第二輪會交換 A/B，GPT-4o 的偏誤主要造成更多順序反轉與
+Tie/conflict，而不能直接視為 High 的額外勝場。後續以 GPT-5.1 作為主要 Pairwise
+judge，GPT-4o 僅保留作為交叉驗證與偏誤紀錄。
+
+### 24-frame 後續實驗
+
+為增加長影片的時間涵蓋範圍，另外對兩個 4B 模型進行 24-frame 實驗；資料仍為相同
+80 支影片，只比較原始 `1920×1080` High 與 `432×240` Low，中間解析度暫不納入。
+High 與 Low 均勻抽取相同數量及相同時間位置的 frames，其餘 prompt、GT、生成參數
+及 `batch_size=1` 均保持不變。
+
+主要新增參數為：
+
+```text
+native_num_frames=24
+native_max_total_pixels=50331648
+```
+
+`50331648`（48 Mi pixels）高於 `24 × 1920 × 1080 = 49766400`，因此 24 張 High
+frame 可以維持 Full HD，不會因 wrapper 的總像素上限而先縮小。Qwen3.5-4B 另維持
+`enable_thinking=false`。
+
+完整輸出目錄：
+
+```text
+outputs/qwen3_vl_4b_native_24f_resolution_full80/
+outputs/qwen35_4b_native_24f_resolution_full80/
+```
+
+兩組皆成功產生 80 筆 High 與 80 筆 Low，沒有空回答。實測 GPU 尖峰顯存與平均
+描述長度如下：
+
+| 生成模型 | GPU 尖峰顯存 | High 平均 words | Low 平均 words |
+|---|---:|---:|---:|
+| Qwen3-VL-4B-Instruct | 17499 MiB / 24564 MiB | 389.2 | 345.9 |
+| Qwen3.5-4B | 16673 MiB / 24564 MiB | 310.9 | 301.6 |
+
+Qwen3.5-9B 在相同 24-frame Full HD 設定下發生 OOM：PyTorch 已配置約
+`22.23 GiB`，只剩約 `285.81 MiB`，但仍需額外配置 `432 MiB`，因此 9B 不納入
+24-frame實驗，保留原本的 12-frame結果。
+
+首先使用 `gpt-5.1-2025-11-13` 進行相同的雙順序盲測 Pairwise 評分，並採嚴格共識，
+比較 12 與 24 frames。High win rate 排除 Tie/conflict；p 值為對共識中明確
+High/Low 勝負進行雙尾 exact binomial test：
+
+| 生成模型 | Frames | High | Low | Tie/conflict | High win rate | p 值 |
+|---|---:|---:|---:|---:|---:|---:|
+| Qwen3-VL-4B-Instruct | 12 | 35 | 18 | 27 | 66.0% | 0.0270 |
+| Qwen3-VL-4B-Instruct | 24 | 37 | 7 | 36 | 84.1% | <0.0001 |
+| Qwen3.5-4B | 12 | 33 | 14 | 33 | 70.2% | 0.0079 |
+| Qwen3.5-4B | 24 | 31 | 19 | 30 | 62.0% | 0.1189 |
+
+24-frame結果另以 `gpt-4o-2024-11-20` 交叉驗證；兩個 judge 使用相同 prompt、A/B
+交換與嚴格共識規則：
+
+| 生成模型 | Judge | High | Low | Tie/conflict | High win rate |
+|---|---|---:|---:|---:|---:|
+| Qwen3-VL-4B-Instruct | GPT-4o | 30 | 8 | 42 | 78.9% |
+|  | GPT-5.1 | 37 | 7 | 36 | 84.1% |
+| Qwen3.5-4B | GPT-4o | 23 | 7 | 50 | 76.7% |
+|  | GPT-5.1 | 31 | 19 | 30 | 62.0% |
+
+GPT-5.1 在兩個模型上皆未檢出顯著 A/B 位置偏誤；GPT-4o 則仍偏好 Candidate A，
+並產生較多 Tie/conflict，因此以 GPT-5.1 作為主要 Pairwise 結果。Qwen3-VL-4B 在
+兩個 judge 下都呈現明顯且接近的 High 優勢；Qwen3.5-4B 雖也由 High 勝出較多，但
+優勢幅度較依賴 judge，且 GPT-5.1 結果未達顯著。這表示增加時間取樣後的解析度敏感度
+具有模型差異，不能解讀為增加 frames 必然擴大 High/Low 差距。Pairwise judge 仍只
+看 GT 與兩份描述、不看實際影片，因此 GT 不完整的限制依然存在。
+
+### GPT-5.1 獨立 VDD 評分
+
+五組完整實驗另以 `gpt-5.1-2025-11-13` 進行獨立 VDD `0–5` 評分。每組皆包含
+80 筆 High 與 80 筆 Low，共 800 筆 review；全部能正常解析，沒有因格式錯誤產生的
+0 分。
+
+| 生成模型 | Frames | VDD High | VDD Low | High − Low |
+|---|---:|---:|---:|---:|
+| Qwen3-VL-4B-Instruct | 12 | 2.4375 | 2.2875 | 0.1500 |
+| Qwen3.5-4B | 12 | 2.6750 | 2.3000 | 0.3750 |
+| Qwen3.5-9B | 12 | 2.4375 | 2.2625 | 0.1750 |
+| Qwen3-VL-4B-Instruct | 24 | 2.9500 | 2.4125 | 0.5375 |
+| Qwen3.5-4B | 24 | 2.7500 | 2.3875 | 0.3625 |
+
+五組平均分皆為 High 高於 Low；其中 24-frame Qwen3-VL-4B 的差距最大，方向與
+Pairwise 結果一致。VDD 是對 High、Low 分別獨立評分，且只看 GT 與模型描述，因此
+用來補充 Pairwise 結果，不單獨作為解析度效果的最終判定。
+
+### Pair Gap 探索性評估（非主要指標）
+
+`data/evaluate_video_resolution_paired_gap.py` 以雙順序盲測同時判斷 High/Low 的
+勝負方向與 `0–3` 差距，可用來參考模型對解析度的敏感程度，但不能衡量模型的絕對
+描述能力。五組完整實驗皆已評分；由於每組有 `25–35/80` 筆 A/B 順序衝突，且通過
+共識的 gap 多集中在 `2`，目前不將 Pair Gap 列為主要指標或主要結論。程式與結果
+仍保留，供重現、補充分析或未來改用結構化 GT 的資料集時參考；主要結果仍以 VDD
+分數搭配 Pairwise 方向驗證為主。
 
 ## 9. 下一個推薦資料集：VDC
 
