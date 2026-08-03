@@ -48,6 +48,7 @@ span.log
 
 # Data and models (large / local-only)
 data/VideoDetailCaption/
+data/VDC/
 pretrained/
 ckpt
 submissions/
