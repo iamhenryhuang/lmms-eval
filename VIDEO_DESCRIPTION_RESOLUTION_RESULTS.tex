@@ -46,6 +46,49 @@ High and Low anonymously in both A/B orders; only agreement across both orders c
 win. High win rate excludes Tie/conflict cases.
 
 \medskip
+\begin{table}[!htbp]
+  \centering
+  \caption{Detailed VDCScore Results on 214 Paired VDC Videos}
+  \label{tab:vdc-resolution-results}
+  \resizebox{\textwidth}{!}{%
+  \begin{tabular}{lrrrrrrrr}
+    \toprule
+    & \multicolumn{4}{c}{Detailed Accuracy}
+        & \multicolumn{4}{c}{Detailed Score (0--5)} \\
+    \cmidrule(lr){2-5}\cmidrule(lr){6-9}
+    Description model
+    & High
+    & Low
+    & $\Delta$ (pp)
+    & $p$
+    & High
+    & Low
+    & $\Delta$
+    & $p$ \\
+    \midrule
+    Qwen3-VL-4B-Instruct & 65.63\% & 63.26\% & +2.37 & 0.0012
+                          & 2.930 & 2.822 & +0.108 & 0.00034 \\
+    Qwen3.5-4B           & 63.91\% & 62.63\% & +1.28 & 0.0811
+                          & 2.846 & 2.802 & +0.045 & 0.1815 \\
+    \bottomrule
+  \end{tabular}
+  }
+\end{table}
+
+\noindent
+The VDC experiment uses 214 paired 1920$\times$1080 and 432$\times$240 videos, with
+24 uniformly sampled frames and 4,113 detailed QA pairs per quality. A local
+Llama-3.1-8B judge applies the two-stage VDCScore procedure. Reported $p$ values are from
+two-sided paired Wilcoxon signed-rank tests over per-video High--Low differences.
+
+\medskip
+\noindent
+Qwen3-VL-4B shows a statistically significant but small High-resolution advantage.
+Qwen3.5-4B has smaller, non-significant gaps. Because a small portion of the provided VDC
+QA references is malformed or overly generic, absolute scores should be interpreted
+cautiously; the paired High--Low differences are the main comparison.
+
+\medskip
 \noindent
 High resolution is generally favored, but the effect varies by model. The largest VDD gap
 appears for Qwen3-VL-4B with 24 frames, which is consistent with its pairwise result. The

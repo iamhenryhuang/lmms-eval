@@ -442,38 +442,121 @@ Pairwise 結果一致。VDD 是對 High、Low 分別獨立評分，且只看 GT 
 仍保留，供重現、補充分析或未來改用結構化 GT 的資料集時參考；主要結果仍以 VDD
 分數搭配 Pairwise 方向驗證為主。
 
-## 9. 下一個推薦資料集：VDC
+## 9. VDC 214 支配對實驗
 
-VDC（Video Detailed Caption）專門評估詳細影片描述，比目前的
-VideoDetailCaption 更貼近本實驗主題。資料集約有 1,027 支影片、總大小約 80 GB，
-每支影片提供多種結構化描述：
-
-- `short`：一句整體摘要
-- `background`：背景、地點、天氣與物件
-- `main_object`：主要人物或物件的屬性與動作
-- `camera`：鏡頭角度、移動與轉場
-- `detailed`：完整詳細描述
-
-VDCScore 會把 GT 拆成多個短 QA，再檢查模型描述能否回答這些問題，比只給一個
-`0–5` 詳細度分數更細緻。相關資源：[VDC 論文](https://arxiv.org/abs/2410.03051)、
+VDC（Video Detailed Caption）專門提供詳細影片描述與結構化 QA，比
+VideoDetailCaption 更適合檢查場景、主體、動作、時序及鏡頭資訊。相關資源：
+[VDC 論文](https://arxiv.org/abs/2410.03051)、
 [VDC 資料集](https://huggingface.co/datasets/wchai/Video-Detailed-Caption)。
 
-目前 lmms-eval 已內建 `lmms_eval/tasks/vdc`，包含：
+### 9.1 VDC 資料與 High/Low 配對
+
+目前下載並解壓第一個影片 shard，共 527 支影片且全部能對上 VDC 標註；其中篩選出
+**214 支 coded resolution 剛好為 `1920×1080`** 的影片，不再另外抽樣子集合。
 
 ```text
-detailed_test
-background_test
-main_object_test
-camera_test
-short_test
+data/VDC/VDC_1k.jsonl                         VDC 描述標註
+data/VDC/VDCScore_qa/                         五類 VDCScore QA
+data/VDC/extracted/videos_1/                  第一個 shard 的 527 支原始影片
+data/VDC/selected/vdc_fhd_all214.jsonl        214 支 1080p 選取名單
+data/VDC/paired/high/                         214 支 1920×1080 High
+data/VDC/paired/low/                          214 支 432×240 Low
+data/VDC/paired/annotations_all.jsonl         214 筆配對標註
 ```
 
-其評分器可使用本機 `Llama-3.1-8B-Instruct` 搭配 SGLang。生成模型與評分模型可
-分開執行，因此單張 RTX 4090 可以先完成影片描述，再卸載生成模型並執行評分。
+選片使用 `data/select_vdc_fhd_subset.py --all-fhd`。配對轉檔使用
+`data/convert_vdc_fhd_pairs.py`：High 與 Low 都轉成 H.264、CRF 18、YUV 4:2:0 並移除
+音訊；High 維持 `1920×1080`，Low 以 Lanczos 縮成 `432×240`。兩者來自同一來源、
+保留相同內容與 FPS，因此主要受控變因是空間解析度。
 
-使用前仍需先檢查影片實際解析度，不能假設全部都是 1080p。預計沿用目前流程：
+每筆 `annotations_all.jsonl` 包含固定 prompt、High/Low 路徑、五類 caption 與五類
+QA：
 
-1. 篩選 Full HD 影片。
-2. 保留原片作為 High。
-3. 轉成 `432×240` 作為 Low。
-4. High 與 Low 共用相同 GT、prompt 與時間抽樣方式。
+```text
+short / background / main_object / camera / detailed
+```
+
+生成階段只要求模型輸出一段完整描述；QA 不會放進 prompt，而是保留給後續
+VDCScore 檢查描述是否涵蓋對應事實。`answer` 暫存 `detailed` caption，以符合
+lmms-eval 的 `doc_to_target` 格式。
+
+### 9.2 自訂 VDC High/Low tasks
+
+配對 tasks 位於：
+
+```text
+lmms_eval/tasks/vdc_resolution_description/
+├── utils.py
+├── vdc_resolution_high.yaml
+└── vdc_resolution_low.yaml
+```
+
+High 與 Low 使用完全相同的固定 prompt：
+
+```text
+Describe the video comprehensively and faithfully in detail. Cover the overall
+event, scene and background, main subjects and their actions, temporal
+progression, and camera movement. Do not invent details that are not visible.
+```
+
+兩個 task 的差異只有影片路徑；prompt、標註與評分用 QA 完全相同。
+
+### 9.3 24-frame 描述生成
+
+目前完成兩個 4B 模型的完整生成，每個模型皆包含 214 筆 High 與 214 筆 Low：
+
+```text
+outputs/VDC/qwen3_vl_4b_native_24f_full214/
+outputs/VDC/qwen35_4b_native_24f_full214/
+```
+
+共同設定為單張 GPU、`batch_size=1`、均勻抽取 24 frames、
+`native_max_total_pixels=50331648`、`max_new_tokens=512`、`temperature=0`；
+Qwen3.5-4B 另設 `enable_thinking=false`。High 與 Low 使用相同 frame 數、時間位置及
+prompt，只有輸入影片解析度不同。
+
+描述長度呈現不同模型行為：Qwen3-VL-4B 的 High 平均約 305 words、Low 約 266
+words；Qwen3.5-4B 的 High 約 271 words、Low 約 294 words。描述較長不代表一定
+較正確，因此仍以 VDCScore QA 評分為主。
+
+### 9.4 Detailed VDCScore
+
+`data/evaluate_vdc_resolution_outputs.py` 對已保存的描述進行離線評分，不重跑影片
+生成。Judge 為本機 `meta-llama/Llama-3.1-8B-Instruct`，透過 SGLang 執行官方
+VDCScore 的兩階段流程：先根據模型描述回答 QA，再將預測答案與 QA GT 比較，輸出
+`yes/no` Accuracy 與 `0–5` Score。評分逐影片保存並支援中斷續跑。
+
+```bash
+python data/evaluate_vdc_resolution_outputs.py \
+  outputs/VDC/qwen3_vl_4b_native_24f_full214 \
+  --categories detailed
+
+python data/evaluate_vdc_resolution_outputs.py \
+  outputs/VDC/qwen35_4b_native_24f_full214 \
+  --categories detailed
+```
+
+兩組皆完成 214 筆 High 與 214 筆 Low，每個品質各評估 4,113 個 detailed QA，沒有
+解析失敗：
+
+| 描述模型 | High Accuracy | Low Accuracy | High − Low | High Score | Low Score | High − Low |
+|---|---:|---:|---:|---:|---:|---:|
+| Qwen3-VL-4B-Instruct | 65.63% | 63.26% | +2.37 pp | 2.930 | 2.822 | +0.108 |
+| Qwen3.5-4B | 63.91% | 62.63% | +1.28 pp | 2.846 | 2.802 | +0.045 |
+
+以每支影片的 High/Low 配對差值進行雙尾 Wilcoxon signed-rank test：Qwen3-VL-4B
+的 Accuracy（`p=0.0012`）與 Score（`p=0.00034`）皆顯著，但效果量僅約
+`0.24–0.25`；Qwen3.5-4B 的 Accuracy（`p=0.081`）與 Score（`p=0.182`）皆未達
+顯著，效果量約 `0.09–0.10`。兩模型 gap 的差異本身也未達顯著，因此不能只憑這
+兩組結果宣稱較新模型必然較不受解析度影響。
+
+描述內容顯示 Qwen3-VL-4B 的 High 較常補充小物件、服裝、光線及鏡頭細節；
+Qwen3.5-4B 則常使用較結構化但偏泛用的敘述，High/Low 在不同影片互有勝負。整體
+結論是 1080p 相較 240p 可能帶來小幅改善，但幅度依模型而異，並非所有模型都會
+顯著受益。
+
+目前以 `detailed` 作為主要指標，因為生成 prompt 本身要求一段涵蓋場景、主體、
+動作、時序及鏡頭的完整描述；官方其他分類原本對應各自的 category-specific 生成
+prompt，不直接混入主要總分。另有至少 254/4,113（約 6.2%）個 detailed QA GT
+帶有明顯泛化或格式異常，因此絕對分數需保守解讀；High/Low 共用相同 QA，其配對
+差值仍較適合本實驗的解析度比較。
