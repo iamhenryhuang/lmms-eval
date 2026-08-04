@@ -2,14 +2,32 @@
 
 ## 1. 進入開發環境
 
-每次開啟新的 terminal 後執行：
+本實驗使用兩個獨立環境，不要在同一張 GPU 上同時載入描述模型與
+VDC judge。
+
+### 影片描述生成：`.venv`
+
+用於 `lmms-eval`、Qwen 影片描述生成與一般資料處理：
 
 ```bash
 cd /home/Henry/lmms-eval
 source .venv/bin/activate
 ```
 
-執行後，terminal 前方應出現 `(.venv)`。
+執行後，terminal 前方應出現 `(.venv)`。本環境使用 CUDA 版
+PyTorch，直接執行 `python -m lmms_eval`，不需要加 `uv run`。
+
+### VDCScore judge：`.venv-vdc-judge`
+
+用於 SGLang 與本機 `meta-llama/Llama-3.1-8B-Instruct` judge：
+
+```bash
+cd /home/Henry/lmms-eval
+source .venv-vdc-judge/bin/activate
+```
+
+執行後，terminal 前方應出現 `(.venv-vdc-judge)`。第一次使用前需完成
+`hf auth login`，並獲得 Llama-3.1-8B-Instruct 的 Hugging Face 存取權限。
 
 ## 2. 資料與標註位置
 
@@ -515,6 +533,46 @@ outputs/VDC/qwen35_4b_native_24f_full214/
 Qwen3.5-4B 另設 `enable_thinking=false`。High 與 Low 使用相同 frame 數、時間位置及
 prompt，只有輸入影片解析度不同。
 
+生成需使用 `.venv`。以下為目前 214 支實驗的實際指令；若重跑，
+應更換 `--output_path`，避免同一目錄出現多組 timestamp JSONL。
+
+Qwen3-VL-4B-Instruct：
+
+```bash
+cd /home/Henry/lmms-eval
+source .venv/bin/activate
+
+CUDA_VISIBLE_DEVICES=1 \
+NCCL_P2P_DISABLE=1 \
+NCCL_IB_DISABLE=1 \
+python -m lmms_eval \
+  --model qwen3_vl_native_video \
+  --model_args pretrained=Qwen/Qwen3-VL-4B-Instruct,device_map=auto,attn_implementation=sdpa,native_num_frames=24,native_max_total_pixels=50331648 \
+  --tasks vdc_resolution_high,vdc_resolution_low \
+  --batch_size 1 \
+  --gen_kwargs max_new_tokens=512,temperature=0,do_sample=false \
+  --predict_only \
+  --log_samples \
+  --output_path outputs/VDC/qwen3_vl_4b_native_24f_full214
+```
+
+Qwen3.5-4B：
+
+```bash
+CUDA_VISIBLE_DEVICES=1 \
+NCCL_P2P_DISABLE=1 \
+NCCL_IB_DISABLE=1 \
+python -m lmms_eval \
+  --model qwen3_vl_native_video \
+  --model_args pretrained=Qwen/Qwen3.5-4B,device_map=auto,attn_implementation=sdpa,native_num_frames=24,native_max_total_pixels=50331648,enable_thinking=false \
+  --tasks vdc_resolution_high,vdc_resolution_low \
+  --batch_size 1 \
+  --gen_kwargs max_new_tokens=512,temperature=0,do_sample=false \
+  --predict_only \
+  --log_samples \
+  --output_path outputs/VDC/qwen35_4b_native_24f_full214
+```
+
 描述長度呈現不同模型行為：Qwen3-VL-4B 的 High 平均約 305 words、Low 約 266
 words；Qwen3.5-4B 的 High 約 271 words、Low 約 294 words。描述較長不代表一定
 較正確，因此仍以 VDCScore QA 評分為主。
@@ -526,7 +584,43 @@ words；Qwen3.5-4B 的 High 約 271 words、Low 約 294 words。描述較長不�
 VDCScore 的兩階段流程：先根據模型描述回答 QA，再將預測答案與 QA GT 比較，輸出
 `yes/no` Accuracy 與 `0–5` Score。評分逐影片保存並支援中斷續跑。
 
+VDCScore 需要兩個 terminal，兩邊都使用 `.venv-vdc-judge`。
+
+Terminal A：啟動 SGLang judge server，並保持該 terminal 執行中：
+
 ```bash
+cd /home/Henry/lmms-eval
+source .venv-vdc-judge/bin/activate
+
+CUDA_VISIBLE_DEVICES=1 \
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --host 127.0.0.1 \
+  --port 30000 \
+  --tp 1 \
+  --dtype bfloat16 \
+  --mem-fraction-static 0.75
+```
+
+看到 `The server is fired up and ready to roll!` 後再開 Terminal B。瀏覽器開啟
+`http://127.0.0.1:30000/` 出現 `Not Found` 是正常的，SGLang 使用的是
+`POST /generate`。可先用下列指令測試：
+
+```bash
+curl -s http://127.0.0.1:30000/generate \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "text": "Answer briefly: What is the capital of France?",
+    "sampling_params": {"temperature": 0, "max_new_tokens": 16}
+  }'
+```
+
+Terminal B：執行 detailed VDCScore：
+
+```bash
+cd /home/Henry/lmms-eval
+source .venv-vdc-judge/bin/activate
+
 python data/evaluate_vdc_resolution_outputs.py \
   outputs/VDC/qwen3_vl_4b_native_24f_full214 \
   --categories detailed
@@ -535,6 +629,10 @@ python data/evaluate_vdc_resolution_outputs.py \
   outputs/VDC/qwen35_4b_native_24f_full214 \
   --categories detailed
 ```
+
+評分會寫入各實驗目錄的 `vdc_eval_detailed.json`；中斷後用同一指令重跑會
+略過已完成項目。描述生成與 VDCScore 完全分離，重跑評分不會重跑 GPU
+影片描述。評分完成後可在 Terminal A 按 `Ctrl-C` 關閉 judge server。
 
 兩組皆完成 214 筆 High 與 214 筆 Low，每個品質各評估 4,113 個 detailed QA，沒有
 解析失敗：
