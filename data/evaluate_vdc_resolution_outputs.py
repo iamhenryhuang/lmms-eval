@@ -274,11 +274,23 @@ class SGLangJudge:
         self.session = requests.Session()
 
     def format_messages(self, messages: list[dict[str, str]]) -> str:
-        return self.tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-        )
+        # Reasoning judges such as Qwen3 emit a <think> block by default, which
+        # consumes the token budget before the required dictionary is produced.
+        # Their chat templates accept enable_thinking; templates that do not
+        # (for example Llama-3.1) raise, so fall back to a plain call.
+        try:
+            return self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=False,
+            )
+        except TypeError:
+            return self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
 
     def generate(self, messages: list[dict[str, str]], max_new_tokens: int) -> str:
         prompt = self.format_messages(messages)
