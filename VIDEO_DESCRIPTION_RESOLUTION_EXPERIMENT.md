@@ -1,8 +1,59 @@
 # 影片描述解析度實驗
 
+## 0. 結論摘要
+
+**問題**：目前的影片描述工具，高低解析度的效能差異是否很大？
+
+**答案：不大。** 214 支配對影片（1920×1080 vs 432×240）、7 個模型，只有 1 個
+達統計顯著，且效果量很小（Cohen's dz ≈ 0.24），換算為每支影片約 19 題 QA 中
+多答對 0.5 題。
+
+| 描述模型 | High Acc | Low Acc | Δ | $p$ |
+|---|---:|---:|---:|---:|
+| Qwen3-VL-4B-Instruct | 65.63% | 63.26% | **+2.37 pp** | **0.00069** |
+| Qwen3.5-4B | 63.91% | 62.63% | +1.28 pp | 0.128 |
+| Qwen2.5-VL-7B-Instruct | 62.58% | 61.40% | +1.18 pp | 0.137 |
+| Gemma 4 E4B | 61.90% | 61.31% | +0.59 pp | 0.424 |
+| InternVL3.5-8B | 53.96% | 53.48% | +0.48 pp | 0.559 |
+| GLM-4.6V-Flash | 58.20% | 57.84% | +0.36 pp | 0.663 |
+| VideoLLaMA3-7B | 59.14% | 59.23% | −0.09 pp | 0.912 |
+
+**為什麼因模型而異**：能否真正接收高解析度取決於視覺編碼器架構。動態解析度
+架構（Qwen 系列）Δ 較大；固定尺寸編碼器（InternVL 固定 448、VideoLLaMA3）會
+在輸入前就壓縮掉高畫質資訊，Δ 接近零。詳見第 9.3 節。
+
+**推薦工具**：Qwen3-VL-4B-Instruct，描述準確率最高（65.63%），僅 4B 參數，
+單張 RTX 4090 可執行。
+
+**結論穩健性**：以下四種條件下方向皆一致——7 個模型 5 個架構家族、兩種 QA
+版本（4,113 / 3,225 題）、兩種統計檢定（paired t-test / Wilcoxon）、兩個
+judge（Llama-3.1-8B / Qwen3-14B）。
+
+**主要限制**：VDC 參考答案由 GPT-4o 自動生成，含主觀題與格式雜訊，故絕對分數
+偏保守；惟 High/Low 共用相同 QA 與 judge，配對差值不受影響。
+
+## 0.1 生成流程驗證
+
+實驗變因是否乾淨，已逐項實測確認：
+
+| 檢查項目 | 結果 |
+|---|---|
+| 214 對影片解析度 | High 全為 1920×1080、Low 全為 432×240，零例外 |
+| High/Low 幀數、FPS、時長 | 214 對完全相同（同源轉檔） |
+| 抽幀時間位置 | High/Low 抽到完全相同的幀索引 |
+| 抽幀密度 | 中位數每 0.69 秒一幀；無影片總幀數不足 24 |
+| Qwen 內部解析度 | High 保留 1088×1920，視覺 token 差 18 倍（24480 vs 1344） |
+| 各模型是否真的看到差異 | 描述文本 Jaccard 相似度 0.31–0.39，明顯不同 |
+| Prompt 一致性 | 214 筆完全相同，零 GT/QA 洩漏 |
+| 模型輸出完整性 | 7 模型各 214/214，零空回答 |
+
+**關鍵驗證**：即使將 High 與 Low 都縮放到相同的 448×448（模擬固定尺寸編碼器的
+前處理），High 的高頻資訊（Laplacian 變異數）平均仍為 Low 的 **4.45 倍**。
+統一尺寸不會抹平解析度差異，變因對所有模型皆成立。
+
 ## 1. 進入開發環境
 
-本實驗使用兩個獨立環境，不要在同一張 GPU 上同時載入描述模型與
+本實驗主要使用兩個獨立環境，不要在同一張 GPU 上同時載入描述模型與
 VDC judge。
 
 ### 影片描述生成：`.venv`
@@ -28,6 +79,20 @@ source .venv-vdc-judge/bin/activate
 
 執行後，terminal 前方應出現 `(.venv-vdc-judge)`。第一次使用前需完成
 `hf auth login`，並獲得 Llama-3.1-8B-Instruct 的 Hugging Face 存取權限。
+
+### VideoLLaMA3 相容環境：`.venv-videollama3`
+
+VideoLLaMA3 的遠端程式需要 Transformers 4.x，因此另外使用固定為
+`transformers==4.46.3`、`torch==2.5.1+cu121` 與 `flash-attn==2.7.3` 的環境，
+避免更動 Qwen、Gemma 及 InternVL 共用的 `.venv`：
+
+```bash
+cd /home/Henry/lmms-eval
+source .venv-videollama3/bin/activate
+```
+
+VideoLLaMA3-7B 已完成完整 214 支 High/Low 生成與兩版 VDCScore 評分，結果見
+第 9.4、9.5 節。
 
 ## 2. 資料與標註位置
 
@@ -451,15 +516,6 @@ GPT-5.1 在兩個模型上皆未檢出顯著 A/B 位置偏誤；GPT-4o 則仍偏
 Pairwise 結果一致。VDD 是對 High、Low 分別獨立評分，且只看 GT 與模型描述，因此
 用來補充 Pairwise 結果，不單獨作為解析度效果的最終判定。
 
-### Pair Gap 探索性評估（非主要指標）
-
-`data/evaluate_video_resolution_paired_gap.py` 以雙順序盲測同時判斷 High/Low 的
-勝負方向與 `0–3` 差距，可用來參考模型對解析度的敏感程度，但不能衡量模型的絕對
-描述能力。五組完整實驗皆已評分；由於每組有 `25–35/80` 筆 A/B 順序衝突，且通過
-共識的 gap 多集中在 `2`，目前不將 Pair Gap 列為主要指標或主要結論。程式與結果
-仍保留，供重現、補充分析或未來改用結構化 GT 的資料集時參考；主要結果仍以 VDD
-分數搭配 Pairwise 方向驗證為主。
-
 ## 9. VDC 214 支配對實驗
 
 VDC（Video Detailed Caption）專門提供詳細影片描述與結構化 QA，比
@@ -521,17 +577,52 @@ progression, and camera movement. Do not invent details that are not visible.
 
 ### 9.3 24-frame 描述生成
 
-目前完成兩個 4B 模型的完整生成，每個模型皆包含 214 筆 High 與 214 筆 Low：
+目前完成七個模型的完整生成，每個模型皆包含 214 筆 High 與 214 筆 Low：
 
 ```text
 outputs/VDC/qwen3_vl_4b_native_24f_full214/
 outputs/VDC/qwen35_4b_native_24f_full214/
+outputs/VDC/qwen25_vl_7b_native_24f_full214/
+outputs/VDC/gemma4_e4b_native_24f_full214/
+outputs/VDC/internvl35_8b_hf_24f_full214/
+outputs/VDC/glm46v_flash_native_24f_full214/
+outputs/VDC/videollama3_7b_native_24f_full214/
 ```
 
-共同設定為單張 GPU、`batch_size=1`、均勻抽取 24 frames、
-`native_max_total_pixels=50331648`、`max_new_tokens=512`、`temperature=0`；
-Qwen3.5-4B 另設 `enable_thinking=false`。High 與 Low 使用相同 frame 數、時間位置及
-prompt，只有輸入影片解析度不同。
+共同設定為單張 GPU、`batch_size=1`、24 frames、`max_new_tokens=512`、
+`temperature=0`、`do_sample=false`。High 與 Low 使用相同 frame 數、時間位置及
+prompt，只有來源影片解析度不同。Qwen 使用自訂 native wrapper 與
+`native_max_total_pixels=50331648`；InternVL 使用 `video_size=448`；Gemma 使用其
+Transformers 原生影片 processor。不同模型的內部視覺預處理不同，因此模型間的
+絕對分數是描述能力比較，而 High--Low 配對差值才是各模型的解析度敏感度。
+
+### 視覺編碼器架構限制（重要）
+
+並非所有模型都能保留 1080p 原生解析度，這是**架構限制而非設定問題**：
+
+| 模型 | 視覺編碼器 | 能否保留原生解析度 |
+|---|---|---|
+| Qwen3-VL / Qwen3.5 / Qwen2.5-VL | 動態解析度（NaViT-style，2D-RoPE） | 可以，故使用 native wrapper |
+| GLM-4.6V-Flash | 動態解析度 | 可以 |
+| InternVL3.5-8B | 固定 448 ViT + pixel shuffle | 不行 |
+| Gemma 4 E4B / VideoLLaMA3-7B | 固定尺寸 encoder | 不行 |
+
+InternVL 的 `video_size=448` 不是可自由調整的參數：其 pixel shuffle 要求偶數
+patch grid，vision encoder 訓練於 448 px（32 patches），改動會破壞模型結構。
+因此無論輸入 1080p 或 240p，都會先被壓到 `448x448`（0.2 MP，僅原始 2.07 MP 的
+約十分之一）。
+
+實測佐證：即使將 High 與 Low 都縮放到相同的 `448x448`，High 的高頻資訊
+（Laplacian 變異數）平均仍為 Low 的 **4.45 倍**（8 支抽樣，範圍 2.4--7.8 倍）。
+這證實統一尺寸不會抹平解析度差異——1080p 是清晰影像縮小、細節仍在，240p 是
+模糊影像放大、已丟失的資訊無法還原，因此本實驗的變因對所有模型都成立。
+
+但衰減程度不同：固定尺寸架構在影像進入模型前就已削去大部分解析度優勢。這與
+觀察到的傾向一致——Δ 最大的兩個（Qwen3-VL `+2.37 pp`、Qwen3.5 `+1.28 pp`）皆為
+動態解析度架構，而固定尺寸的 InternVL（`+0.48 pp`）、VideoLLaMA3（`−0.09 pp`）
+接近零。惟 Gemma（`+0.59 pp`）與 GLM-4.6V-Flash（`+0.36 pp`）不完全符合此模式，
+且 n=7 不足以做統計檢定，故此僅為**觀察到的傾向，非證實的因果關係**。因此
+InternVL 等模型的低敏感度不能單純歸因於模型本身，其前處理設定亦是原因之一。
 
 生成需使用 `.venv`。以下為目前 214 支實驗的實際指令；若重跑，
 應更換 `--output_path`，避免同一目錄出現多組 timestamp JSONL。
@@ -573,9 +664,46 @@ python -m lmms_eval \
   --output_path outputs/VDC/qwen35_4b_native_24f_full214
 ```
 
+Gemma 4 E4B：
+
+```bash
+CUDA_VISIBLE_DEVICES=1 \
+NCCL_P2P_DISABLE=1 \
+NCCL_IB_DISABLE=1 \
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+python -m lmms_eval \
+  --model huggingface \
+  --model_args pretrained=google/gemma-4-E4B-it,device_map=auto,attn_implementation=sdpa,max_num_frames=24 \
+  --tasks vdc_resolution_high,vdc_resolution_low \
+  --batch_size 1 \
+  --gen_kwargs max_new_tokens=512,temperature=0,do_sample=false \
+  --predict_only \
+  --log_samples \
+  --output_path outputs/VDC/gemma4_e4b_native_24f_full214
+```
+
+InternVL3.5-8B：
+
+```bash
+CUDA_VISIBLE_DEVICES=1 \
+NCCL_P2P_DISABLE=1 \
+NCCL_IB_DISABLE=1 \
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+python -m lmms_eval \
+  --model internvl_hf \
+  --model_args pretrained=OpenGVLab/InternVL3_5-8B-HF,device_map=auto,attn_implementation=sdpa,num_frames=24,video_size=448 \
+  --tasks vdc_resolution_high,vdc_resolution_low \
+  --batch_size 1 \
+  --gen_kwargs max_new_tokens=512,temperature=0,do_sample=false \
+  --predict_only \
+  --log_samples \
+  --output_path outputs/VDC/internvl35_8b_hf_24f_full214
+```
+
 描述長度呈現不同模型行為：Qwen3-VL-4B 的 High 平均約 305 words、Low 約 266
-words；Qwen3.5-4B 的 High 約 271 words、Low 約 294 words。描述較長不代表一定
-較正確，因此仍以 VDCScore QA 評分為主。
+words；Qwen3.5-4B 的 High 約 271 words、Low 約 294 words；Gemma 的 High/Low
+約 302/296 words；InternVL 則約 87/65 words。描述較長不代表一定較正確，因此仍
+以 VDCScore QA 評分為主。
 
 ### 9.4 Detailed VDCScore
 
@@ -602,18 +730,7 @@ python -m sglang.launch_server \
   --mem-fraction-static 0.75
 ```
 
-看到 `The server is fired up and ready to roll!` 後再開 Terminal B。瀏覽器開啟
-`http://127.0.0.1:30000/` 出現 `Not Found` 是正常的，SGLang 使用的是
-`POST /generate`。可先用下列指令測試：
-
-```bash
-curl -s http://127.0.0.1:30000/generate \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "text": "Answer briefly: What is the capital of France?",
-    "sampling_params": {"temperature": 0, "max_new_tokens": 16}
-  }'
-```
+看到 `The server is fired up and ready to roll!` 後再開 Terminal B。
 
 Terminal B：執行 detailed VDCScore：
 
@@ -621,40 +738,111 @@ Terminal B：執行 detailed VDCScore：
 cd /home/Henry/lmms-eval
 source .venv-vdc-judge/bin/activate
 
-python data/evaluate_vdc_resolution_outputs.py \
+for experiment in \
   outputs/VDC/qwen3_vl_4b_native_24f_full214 \
-  --categories detailed
-
-python data/evaluate_vdc_resolution_outputs.py \
   outputs/VDC/qwen35_4b_native_24f_full214 \
-  --categories detailed
+  outputs/VDC/qwen25_vl_7b_native_24f_full214 \
+  outputs/VDC/gemma4_e4b_native_24f_full214 \
+  outputs/VDC/internvl35_8b_hf_24f_full214 \
+  outputs/VDC/glm46v_flash_native_24f_full214 \
+  outputs/VDC/videollama3_7b_native_24f_full214
+do
+  python data/evaluate_vdc_resolution_outputs.py \
+    "$experiment" \
+    --categories detailed
+done
 ```
 
 評分會寫入各實驗目錄的 `vdc_eval_detailed.json`；中斷後用同一指令重跑會
 略過已完成項目。描述生成與 VDCScore 完全分離，重跑評分不會重跑 GPU
 影片描述。評分完成後可在 Terminal A 按 `Ctrl-C` 關閉 judge server。
 
-兩組皆完成 214 筆 High 與 214 筆 Low，每個品質各評估 4,113 個 detailed QA，沒有
+七組皆完成 214 筆 High 與 214 筆 Low，每個品質各評估 4,113 個 detailed QA，沒有
 解析失敗：
 
-| 描述模型 | High Accuracy | Low Accuracy | High − Low | High Score | Low Score | High − Low |
-|---|---:|---:|---:|---:|---:|---:|
-| Qwen3-VL-4B-Instruct | 65.63% | 63.26% | +2.37 pp | 2.930 | 2.822 | +0.108 |
-| Qwen3.5-4B | 63.91% | 62.63% | +1.28 pp | 2.846 | 2.802 | +0.045 |
+| 描述模型 | High Accuracy | Low Accuracy | High − Low | $p$ (paired $t$-test) |
+|---|---:|---:|---:|---:|
+| Qwen3-VL-4B-Instruct | 65.63% | 63.26% | +2.37 pp | 0.00069（顯著）|
+| Qwen3.5-4B | 63.91% | 62.63% | +1.28 pp | 0.128 |
+| Qwen2.5-VL-7B-Instruct | 62.58% | 61.40% | +1.18 pp | 0.137 |
+| Gemma 4 E4B | 61.90% | 61.31% | +0.59 pp | 0.424 |
+| InternVL3.5-8B | 53.96% | 53.48% | +0.48 pp | 0.559 |
+| GLM-4.6V-Flash | 58.20% | 57.84% | +0.36 pp | 0.663 |
+| VideoLLaMA3-7B | 59.14% | 59.23% | **−0.09 pp** | 0.912 |
 
-以每支影片的 High/Low 配對差值進行雙尾 Wilcoxon signed-rank test：Qwen3-VL-4B
-的 Accuracy（`p=0.0012`）與 Score（`p=0.00034`）皆顯著，但效果量僅約
-`0.24–0.25`；Qwen3.5-4B 的 Accuracy（`p=0.081`）與 Score（`p=0.182`）皆未達
-顯著，效果量約 `0.09–0.10`。兩模型 gap 的差異本身也未達顯著，因此不能只憑這
-兩組結果宣稱較新模型必然較不受解析度影響。
-
-描述內容顯示 Qwen3-VL-4B 的 High 較常補充小物件、服裝、光線及鏡頭細節；
-Qwen3.5-4B 則常使用較結構化但偏泛用的敘述，High/Low 在不同影片互有勝負。整體
-結論是 1080p 相較 240p 可能帶來小幅改善，但幅度依模型而異，並非所有模型都會
-顯著受益。
+重點：七個模型中只有 Qwen3-VL-4B 達統計顯著，且效果量（Cohen's dz $\approx$
+0.24）仍偏小。其餘六個模型的差距都不顯著；VideoLLaMA3-7B 是唯一 Δ 為負、p 值
+也最大（0.912）的模型，GLM-4.6V-Flash 的 Δ 與 p 值也同樣顯示解析度幾乎無感。
+Qwen2.5-VL-7B 雖然 Δ 為正（`+1.18 pp`），但 per-video 勝負為 `76:80`（Low 勝場
+反而略多），代表 High 只在少數影片上大幅領先，整體方向並不穩定。
 
 目前以 `detailed` 作為主要指標，因為生成 prompt 本身要求一段涵蓋場景、主體、
 動作、時序及鏡頭的完整描述；官方其他分類原本對應各自的 category-specific 生成
 prompt，不直接混入主要總分。另有至少 254/4,113（約 6.2%）個 detailed QA GT
 帶有明顯泛化或格式異常，因此絕對分數需保守解讀；High/Low 共用相同 QA，其配對
 差值仍較適合本實驗的解析度比較。
+
+### 9.5 Factual QA 過濾後結果
+
+`data/build_vdc_clean_qa.py` 只保留可由影片畫面直接判斷、答案具體且格式正常的
+detailed QA。過濾後每個品質由 4,113 題降為 3,225 題；這是敏感度分析，官方未過濾
+QA 仍保留作為主要可重現結果。
+
+七個模型可依序評分：
+
+```bash
+for experiment in \
+  outputs/VDC/qwen3_vl_4b_native_24f_full214 \
+  outputs/VDC/qwen35_4b_native_24f_full214 \
+  outputs/VDC/qwen25_vl_7b_native_24f_full214 \
+  outputs/VDC/gemma4_e4b_native_24f_full214 \
+  outputs/VDC/internvl35_8b_hf_24f_full214 \
+  outputs/VDC/glm46v_flash_native_24f_full214 \
+  outputs/VDC/videollama3_7b_native_24f_full214
+do
+  python data/evaluate_vdc_resolution_outputs.py \
+    "$experiment" \
+    --annotations data/VDC/paired/annotations_factual.jsonl \
+    --categories detailed \
+    --output "$experiment/vdc_eval_detailed_factual.json"
+done
+```
+
+| 描述模型 | High Accuracy | Low Accuracy | High − Low | Accuracy p | High Score | Low Score | High − Low | Score p |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Qwen3-VL-4B-Instruct | 62.66% | 60.04% | +2.62 pp | 0.0027 | 2.799 | 2.678 | +0.121 | 0.0015 |
+| Qwen3.5-4B | 60.99% | 58.81% | +2.17 pp | 0.0288 | 2.718 | 2.638 | +0.080 | 0.0579 |
+| Qwen2.5-VL-7B-Instruct | 59.06% | 57.98% | +1.09 pp | 0.2581 | 2.643 | 2.590 | +0.053 | 0.1903 |
+| Gemma 4 E4B | 59.89% | 58.88% | +1.01 pp | 0.2615 | 2.649 | 2.597 | +0.052 | 0.1623 |
+| InternVL3.5-8B | 50.00% | 49.83% | +0.17 pp | 0.8610 | 2.243 | 2.227 | +0.016 | 0.7034 |
+| GLM-4.6V-Flash | 54.68% | 54.80% | **−0.12 pp** | 0.8985 | 2.445 | 2.448 | $-$0.003 | 0.9394 |
+| VideoLLaMA3-7B | 55.28% | 55.21% | +0.07 pp | 0.941 | 2.476 | 2.467 | +0.010 | 0.813 |
+
+重點：過濾後結論不變。Qwen3-VL-4B 的 Accuracy、Score 與 Qwen3.5-4B 的 Accuracy
+皆達 `p<0.05`；Qwen3.5-4B 的 Score（`p=0.058`）略高於門檻。Qwen2.5-VL-7B、
+Gemma、InternVL、GLM-4.6V-Flash、VideoLLaMA3-7B 五者皆未達顯著；GLM-4.6V-Flash
+的 Accuracy 差距在過濾後轉為負值（−0.12 pp），與 VideoLLaMA3-7B 同為七個模型中
+最不受解析度影響的兩個。
+
+### 9.6 更嚴格 judge 的交叉驗證（Qwen3-14B，僅診斷）
+
+主結果採用官方指定的 Llama-3.1-8B judge。為確認結論不依賴特定 judge，另以
+`Qwen/Qwen3-14B-FP8` 對 Qwen3-VL-4B 的前 30 支影片重跑 factual QA 評分：
+
+| Judge | High Acc | Low Acc | High Score | Low Score |
+|---|---:|---:|---:|---:|
+| Llama-3.1-8B | 65.00% | 58.63% | 2.890 | 2.626 |
+| Qwen3-14B-FP8 | 45.26% | 44.01% | 2.853 | 2.795 |
+
+**Accuracy 大幅下降但 Score 幾乎不變**。原因是兩者 yes/no 門檻不同：Llama-8B
+近乎二元（`yes`→4–5 分、`no`→0 分），Qwen3-14B 會使用中間刻度（`no` 配 1–2
+分）。446 題中有 107 題（24%）判決翻轉，方向皆為 Llama 判 `yes` 而
+Qwen3-14B 判 `no`。
+
+結論：**絕對 Accuracy 可能被系統性高估，但 High/Low 相對關係一致**，配對差值
+不受影響。因成本過高（七個模型逾 10 小時）且不影響主結論，未擴大至完整 214 支。
+
+若要重跑：關閉原 judge server 後以相同 port 啟動 Qwen3-14B，評分時須加
+`--judge-model Qwen/Qwen3-14B-FP8` 與 `--output <新檔名>`（避免覆蓋 Llama
+結果）。
+- 兩套 judge 的絕對分數相差約 20 pp，**不可放在同一張表格中比較**。

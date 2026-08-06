@@ -3,52 +3,17 @@
 \usepackage[margin=2.2cm]{geometry}
 \usepackage{booktabs}
 \usepackage{graphicx}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setCJKmainfont{Noto Sans CJK TC}
 
 \begin{document}
 
 \begin{table}[!htbp]
   \centering
-  \caption{High- vs. Low-Resolution Video Description Results at 24 Frames}
-  \label{tab:resolution-results}
-  \resizebox{\textwidth}{!}{%
-  \begin{tabular}{lrrrrrrr}
-    \toprule
-    & \multicolumn{3}{c}{Independent Score (0--5)}
-        & \multicolumn{4}{c}{Two-pass pairwise evaluation} \\
-    \cmidrule(lr){2-4}\cmidrule(lr){5-8}
-    Description model
-    & High
-    & Low
-    & $\Delta$ (High $-$ Low)
-    & High wins
-    & Low wins
-    & Tie/conflict
-    & High win rate \\
-    \midrule
-    Qwen3-VL-4B-Instruct & 2.9500 & 2.4125 & 0.5375 & 37 &  7 & 36 & 84.1\% \\
-    Qwen3.5-4B           & 2.7500 & 2.3875 & 0.3625 & 31 & 19 & 30 & 62.0\% \\
-    \bottomrule
-  \end{tabular}
-  }
-\end{table}
-
-\noindent
-All experiments use the same 80 paired videos, prompts, and references. High is the original
-1920$\times$1080 video and Low is the corresponding 432$\times$240 version. Both models
-uniformly sample 24 frames at matching temporal positions. Qwen3.5-9B is excluded because
-the same 24-frame setting exceeds the available GPU memory; 12-frame results are retained
-in the experiment notes as supplementary results.
-
-\medskip
-\noindent
-GPT-5.1 VDD independently scores each description from 0 to 5. Pairwise evaluation compares
-High and Low anonymously in both A/B orders; only agreement across both orders counts as a
-win. High win rate excludes Tie/conflict cases.
-
-\medskip
-\begin{table}[!htbp]
-  \centering
-  \caption{Detailed VDCScore Results on 214 Paired VDC Videos}
+  \caption{214 支配對 VDC 影片、24 frames：Detailed VDCScore 結果
+    （High = 1920$\times$1080，Low = 432$\times$240；judge 為 Llama-3.1-8B；
+    $p$ 為雙尾 paired $t$-test）}
   \label{tab:vdc-resolution-results}
   \resizebox{\textwidth}{!}{%
   \begin{tabular}{lrrrrrrrr}
@@ -57,41 +22,126 @@ win. High win rate excludes Tie/conflict cases.
         & \multicolumn{4}{c}{Detailed Score (0--5)} \\
     \cmidrule(lr){2-5}\cmidrule(lr){6-9}
     Description model
-    & High
-    & Low
-    & $\Delta$ (pp)
-    & $p$
-    & High
-    & Low
-    & $\Delta$
-    & $p$ \\
+    & High & Low & $\Delta$ (pp) & $p$
+    & High & Low & $\Delta$ & $p$ \\
     \midrule
-    Qwen3-VL-4B-Instruct & 65.63\% & 63.26\% & +2.37 & 0.0012
-                          & 2.930 & 2.822 & +0.108 & 0.00034 \\
-    Qwen3.5-4B           & 63.91\% & 62.63\% & +1.28 & 0.0811
-                          & 2.846 & 2.802 & +0.045 & 0.1815 \\
+    Qwen3-VL-4B-Instruct & 65.63\% & 63.26\% & +2.37 & 0.00069
+                          & 2.930 & 2.822 & +0.108 & 0.00030 \\
+    Qwen3.5-4B           & 63.91\% & 62.63\% & +1.28 & 0.1284
+                          & 2.846 & 2.802 & +0.045 & 0.2090 \\
+    Qwen2.5-VL-7B-Instruct & 62.58\% & 61.40\% & +1.18 & 0.1371
+                          & 2.800 & 2.743 & +0.057 & 0.0922 \\
+    Gemma 4 E4B          & 61.90\% & 61.31\% & +0.59 & 0.4236
+                          & 2.732 & 2.704 & +0.028 & 0.3696 \\
+    InternVL3.5-8B       & 53.96\% & 53.48\% & +0.48 & 0.5587
+                          & 2.417 & 2.390 & +0.027 & 0.4308 \\
+    GLM-4.6V-Flash        & 58.20\% & 57.84\% & +0.36 & 0.6628
+                          & 2.599 & 2.582 & +0.017 & 0.6283 \\
+    VideoLLaMA3-7B        & 59.14\% & 59.23\% & $-$0.09 & 0.9119
+                          & 2.645 & 2.647 & $-$0.002 & 0.9659 \\
+    \bottomrule
+  \end{tabular}
+  }
+\end{table}
+
+\medskip
+\begin{table}[!htbp]
+  \centering
+  \caption{同上表，Per-video 勝負分佈（accuracy，214 支中）}
+  \label{tab:vdc-resolution-pervideo}
+  \resizebox{0.6\textwidth}{!}{%
+  \begin{tabular}{lrrr}
+    \toprule
+    Description model & High better & Low better & Tie \\
+    \midrule
+    Qwen3-VL-4B-Instruct & 103 & 62 & 49 \\
+    Qwen3.5-4B           &  98 & 83 & 33 \\
+    Qwen2.5-VL-7B-Instruct & 76 & 80 & 58 \\
+    Gemma 4 E4B          &  86 & 87 & 41 \\
+    InternVL3.5-8B       &  82 & 86 & 46 \\
+    GLM-4.6V-Flash       &  81 & 77 & 56 \\
+    VideoLLaMA3-7B       &  87 & 84 & 43 \\
     \bottomrule
   \end{tabular}
   }
 \end{table}
 
 \noindent
-The VDC experiment uses 214 paired 1920$\times$1080 and 432$\times$240 videos, with
-24 uniformly sampled frames and 4,113 detailed QA pairs per quality. A local
-Llama-3.1-8B judge applies the two-stage VDCScore procedure. Reported $p$ values are from
-two-sided paired Wilcoxon signed-rank tests over per-video High--Low differences.
+\textbf{重點：}七個模型中只有 Qwen3-VL-4B 達統計顯著，差距僅 2.37 個百分點，
+換算每支影片（約 19 題 QA）平均多答對半題左右。其餘六個模型皆不顯著，
+per-video 勝負場數接近五五波（如 Gemma 86:87、Qwen2.5-VL 76:80）。
+\textbf{差異不大，且因模型而異。}
 
 \medskip
 \noindent
-Qwen3-VL-4B shows a statistically significant but small High-resolution advantage.
-Qwen3.5-4B has smaller, non-significant gaps. Because a small portion of the provided VDC
-QA references is malformed or overly generic, absolute scores should be interpreted
-cautiously; the paired High--Low differences are the main comparison.
+\textbf{為何因模型而異：}能否利用高解析度取決於視覺編碼器架構。支援動態解析度
+的 Qwen 系列 $\Delta$ 較大（$+1.2\sim2.4$ pp）；視覺編碼器固定尺寸者
+（InternVL 固定 448、VideoLLaMA3）在輸入前即壓縮掉高畫質資訊，$\Delta$ 接近零
+（$+0.48$、$-0.09$ pp）。惟 Gemma 與 GLM-4.6V-Flash 不完全符合此模式，
+$n=7$ 亦不足以做統計檢定，故僅為觀察到的傾向。因各模型前處理不同，模型間的
+絕對分數不宜直接比較，本表主要比較各模型自身的 High$-$Low 配對差值。
 
 \medskip
+\begin{table}[!htbp]
+  \centering
+  \caption{同上表，改用過濾後的 Factual QA（4{,}113 題中保留 3{,}225 題）}
+  \label{tab:vdc-resolution-factual-results}
+  \resizebox{\textwidth}{!}{%
+  \begin{tabular}{lrrrrrrrr}
+    \toprule
+    & \multicolumn{4}{c}{Detailed Accuracy}
+        & \multicolumn{4}{c}{Detailed Score (0--5)} \\
+    \cmidrule(lr){2-5}\cmidrule(lr){6-9}
+    Description model
+    & High & Low & $\Delta$ (pp) & $p$
+    & High & Low & $\Delta$ & $p$ \\
+    \midrule
+    Qwen3-VL-4B-Instruct & 62.66\% & 60.04\% & +2.62 & 0.0027
+                          & 2.799 & 2.678 & +0.121 & 0.0015 \\
+    Qwen3.5-4B           & 60.99\% & 58.81\% & +2.17 & 0.0288
+                          & 2.718 & 2.638 & +0.080 & 0.0579 \\
+    Qwen2.5-VL-7B-Instruct & 59.06\% & 57.98\% & +1.09 & 0.2581
+                          & 2.643 & 2.590 & +0.053 & 0.1903 \\
+    Gemma 4 E4B           & 59.89\% & 58.88\% & +1.01 & 0.2615
+                          & 2.649 & 2.597 & +0.052 & 0.1623 \\
+    InternVL3.5-8B        & 50.00\% & 49.83\% & +0.17 & 0.8610
+                          & 2.243 & 2.227 & +0.016 & 0.7034 \\
+    GLM-4.6V-Flash         & 54.68\% & 54.80\% & $-$0.12 & 0.8985
+                          & 2.445 & 2.448 & $-$0.003 & 0.9394 \\
+    VideoLLaMA3-7B         & 55.28\% & 55.21\% & +0.07 & 0.9410
+                          & 2.476 & 2.467 & +0.010 & 0.8129 \\
+    \bottomrule
+  \end{tabular}
+  }
+\end{table}
+
+\medskip
+\begin{table}[!htbp]
+  \centering
+  \caption{同上表，Per-video 勝負分佈（accuracy，214 支中）}
+  \label{tab:vdc-resolution-factual-pervideo}
+  \resizebox{0.6\textwidth}{!}{%
+  \begin{tabular}{lrrr}
+    \toprule
+    Description model & High better & Low better & Tie \\
+    \midrule
+    Qwen3-VL-4B-Instruct & 100 & 64 & 50 \\
+    Qwen3.5-4B           &  99 & 68 & 47 \\
+    Qwen2.5-VL-7B-Instruct & 82 & 86 & 46 \\
+    Gemma 4 E4B          &  91 & 79 & 44 \\
+    InternVL3.5-8B       &  80 & 77 & 57 \\
+    GLM-4.6V-Flash       &  84 & 86 & 44 \\
+    VideoLLaMA3-7B       &  87 & 84 & 43 \\
+    \bottomrule
+  \end{tabular}
+  }
+\end{table}
+
 \noindent
-High resolution is generally favored, but the effect varies by model. The largest VDD gap
-appears for Qwen3-VL-4B with 24 frames, which is consistent with its pairwise result. The
-judge compares generated descriptions with reference text and does not view the videos.
+\textbf{重點：}過濾後結論方向不變。Qwen3-VL-4B 顯著性更明確
+（accuracy $p=0.0027$、score $p=0.0015$），Qwen3.5-4B 的 accuracy 亦達顯著
+（$p=0.0288$）。Qwen2.5-VL-7B、Gemma、InternVL、GLM-4.6V-Flash、VideoLLaMA3-7B
+仍不顯著；GLM-4.6V-Flash 的差距在過濾後轉為負值（$-$0.12pp），與 VideoLLaMA3-7B
+同為七個模型中最不受解析度影響的兩個。
 
 \end{document}
