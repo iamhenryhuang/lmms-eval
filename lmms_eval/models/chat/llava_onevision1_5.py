@@ -1,6 +1,7 @@
 import time
 from typing import List
 
+import cv2
 import numpy as np
 import torch
 from loguru import logger as eval_logger
@@ -19,13 +20,90 @@ from lmms_eval.protocol import ChatMessages
 process_vision_info, _ = optional_import("qwen_vl_utils", "process_vision_info")
 
 
+def _as_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 @register_model("llava_onevision1_5_chat")
 class Llava_OneVision1_5(LlavaOneVisionSimple):
     is_simple = False
     fps = None
 
+    def __init__(
+        self,
+        *args,
+        native_video_frames: bool | str = False,
+        fixed_num_frames: int | None = None,
+        **kwargs,
+    ):
+        if fixed_num_frames is not None:
+            kwargs["max_num_frames"] = int(fixed_num_frames)
+        super().__init__(*args, **kwargs)
+        self.native_video_frames = _as_bool(native_video_frames)
+        self.fixed_num_frames = int(fixed_num_frames) if fixed_num_frames is not None else self.max_num_frames
+
+    def _decode_uniform_native_video(self, video_path: str) -> torch.Tensor:
+        """Decode uniformly sampled source frames without spatial resizing."""
+
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise RuntimeError(f"OpenCV could not open video: {video_path}")
+
+        try:
+            total_frames = int(round(cap.get(cv2.CAP_PROP_FRAME_COUNT)))
+            width = int(round(cap.get(cv2.CAP_PROP_FRAME_WIDTH)))
+            height = int(round(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+            if total_frames <= 0:
+                raise RuntimeError(f"Could not determine frame count for {video_path}")
+
+            sample_count = min(self.fixed_num_frames, total_frames)
+            requested_indices = np.rint(np.linspace(0, total_frames - 1, sample_count)).astype(np.int64).tolist()
+            if len(requested_indices) % 2:
+                requested_indices.append(requested_indices[-1])
+
+            frames = []
+            decoded_indices = []
+            for requested_index in requested_indices:
+                frame_bgr = None
+                actual_index = -1
+                for candidate in range(requested_index, max(-1, requested_index - 33), -1):
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, candidate)
+                    ok, candidate_frame = cap.read()
+                    if ok:
+                        frame_bgr = candidate_frame
+                        reported_index = int(round(cap.get(cv2.CAP_PROP_POS_FRAMES))) - 1
+                        actual_index = reported_index if reported_index >= 0 else candidate
+                        break
+                if frame_bgr is None:
+                    raise RuntimeError(
+                        f"Could not decode frame {requested_index} or any of the "
+                        f"previous 32 frames from {video_path}"
+                    )
+                if actual_index != requested_index:
+                    eval_logger.warning(
+                        f"Video frame {requested_index} was unavailable; using "
+                        f"nearest decodable frame {actual_index}."
+                    )
+                decoded_indices.append(actual_index)
+                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                frames.append(torch.from_numpy(frame_rgb).permute(2, 0, 1))
+
+            video = torch.stack(frames)
+            eval_logger.info(
+                "Native LLaVA-OneVision-1.5 video frames: "
+                f"path={video_path}, source_tensor={tuple(video.shape)}, "
+                f"source_size=({height}, {width}), frame_indices={decoded_indices}, "
+                f"max_pixels={self.max_pixels}"
+            )
+            return video
+        finally:
+            cap.release()
+
     def generate_until(self, requests: List[Instance]) -> List[GenerationResult]:
-        assert process_vision_info is not None, "qwen_vl_utils is required. Please install it via `pip install qwen-vl-utils`"
+        if not self.native_video_frames:
+            assert process_vision_info is not None, "qwen_vl_utils is required. Please install it via `pip install qwen-vl-utils`"
 
         res = []
 
@@ -75,11 +153,24 @@ class Llava_OneVision1_5(LlavaOneVisionSimple):
             if self.rank == 0 and doc_id[0] % 100 == 0:
                 eval_logger.debug(f"Prompt for doc ID {doc_id[0]}:\n\n{texts[0]}\n")
 
-            # Extract image/video inputs consistent with OneVision processing
-            image_inputs, video_inputs = process_vision_info(hf_messages_list)
+            # The native path bypasses qwen_vl_utils' per-frame pixel cap and
+            # lets the checkpoint processor resize the original source frames.
+            if self.native_video_frames:
+                image_inputs = None
+                video_inputs = []
+                for chat_messages in chat_messages_list:
+                    images, videos, _ = chat_messages.extract_media()
+                    if images:
+                        raise ValueError("native_video_frames currently supports video-only requests")
+                    if len(videos) != 1:
+                        raise ValueError(f"native_video_frames requires exactly one video per request, got {len(videos)}")
+                    video_inputs.append(self._decode_uniform_native_video(videos[0]))
+            else:
+                # Extract image/video inputs consistent with OneVision processing
+                image_inputs, video_inputs = process_vision_info(hf_messages_list)
 
             # Sample video frames to max_num_frames (simple implementation handles only first element)
-            if video_inputs is not None and len(video_inputs) > 0 and isinstance(video_inputs[0], torch.Tensor):
+            if not self.native_video_frames and video_inputs is not None and len(video_inputs) > 0 and isinstance(video_inputs[0], torch.Tensor):
                 total_frames = video_inputs[0].shape[0]
                 indices = np.linspace(0, total_frames - 1, self.max_num_frames, dtype=int)
                 if total_frames - 1 not in indices:

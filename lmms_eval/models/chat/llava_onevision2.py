@@ -81,6 +81,7 @@ class Llava_OneVision2(lmms):
         max_num_frames: int = 32,
         fixed_num_frames: int | None = None,
         target_fps: float | None = None,
+        native_video_frames: bool | str = False,
         # Generation controls
         max_new_tokens: int = 128,
         system_prompt: str = "You are a helpful assistant.",
@@ -209,6 +210,9 @@ class Llava_OneVision2(lmms):
         self.max_num_frames = int(max_num_frames)
         self.fixed_num_frames = int(fixed_num_frames) if fixed_num_frames else None
         self.target_fps = float(target_fps) if target_fps else None
+        self.native_video_frames = _as_bool(native_video_frames)
+        if self.native_video_frames and self.fixed_num_frames is None:
+            raise ValueError("native_video_frames requires fixed_num_frames")
         self.max_new_tokens = int(max_new_tokens)
         self.system_prompt = system_prompt
         self.fps = float(fps)
@@ -289,30 +293,36 @@ class Llava_OneVision2(lmms):
             self._current_codec_video_urls.append(video_url)
             return [{"type": "video", "video": video_url}], []
 
-        assert fetch_video is not None, "qwen_vl_utils is required. Please install it via `pip install qwen-vl-utils`"
-
-        video_request = {
-            "type": "video",
-            "video": video_url,
-            "max_pixels": self.max_pixels,
-            "min_pixels": self.min_pixels,
-        }
-        if self.fixed_num_frames:
-            total_frames = self._get_video_total_frames(video_url)
-            video_request["nframes"] = min(self.fixed_num_frames, total_frames)
+        if self.native_video_frames:
+            pil_frames, indices, fps = self._decode_uniform_native_frames(
+                video_url,
+                self.fixed_num_frames,
+            )
         else:
-            video_request["fps"] = self.fps
-            video_request["max_frames"] = self.max_num_frames
-        video_input, video_metadata = fetch_video(
-            video_request,
-            return_video_metadata=True,
-        )
-        frames = video_input  # tensor [T, 3, H, W] uint8
-        indices = video_metadata["frames_indices"]
-        fps = video_metadata.get("fps", 30.0)
-        if not isinstance(indices, list):
-            indices = indices.tolist()
-        pil_frames = [Image.fromarray(f.permute(1, 2, 0).numpy().astype(np.uint8)) for f in frames]
+            assert fetch_video is not None, "qwen_vl_utils is required. Please install it via `pip install qwen-vl-utils`"
+
+            video_request = {
+                "type": "video",
+                "video": video_url,
+                "max_pixels": self.max_pixels,
+                "min_pixels": self.min_pixels,
+            }
+            if self.fixed_num_frames:
+                total_frames = self._get_video_total_frames(video_url)
+                video_request["nframes"] = min(self.fixed_num_frames, total_frames)
+            else:
+                video_request["fps"] = self.fps
+                video_request["max_frames"] = self.max_num_frames
+            video_input, video_metadata = fetch_video(
+                video_request,
+                return_video_metadata=True,
+            )
+            frames = video_input  # tensor [T, 3, H, W] uint8
+            indices = video_metadata["frames_indices"]
+            fps = video_metadata.get("fps", 30.0)
+            if not isinstance(indices, list):
+                indices = indices.tolist()
+            pil_frames = [Image.fromarray(f.permute(1, 2, 0).numpy().astype(np.uint8)) for f in frames]
 
         merge_size = 2
         if len(indices) % merge_size != 0:
@@ -329,6 +339,78 @@ class Llava_OneVision2(lmms):
             video_content.append({"type": "image", "image": img})
             pil_images.append(img)
         return video_content, pil_images
+
+    def _decode_uniform_native_frames(
+        self,
+        video_url: str,
+        num_frames: int,
+    ) -> tuple[list[Image.Image], list[int], float]:
+        """Decode uniformly sampled source frames without spatial resizing."""
+
+        cap = cv2.VideoCapture(video_url)
+        if not cap.isOpened():
+            raise RuntimeError(f"OpenCV could not open video: {video_url}")
+
+        try:
+            total_frames = int(round(cap.get(cv2.CAP_PROP_FRAME_COUNT)))
+            fps = float(cap.get(cv2.CAP_PROP_FPS))
+            width = int(round(cap.get(cv2.CAP_PROP_FRAME_WIDTH)))
+            height = int(round(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+            if total_frames <= 0:
+                raise RuntimeError(f"Could not determine frame count for {video_url}")
+            if not np.isfinite(fps) or fps <= 0:
+                raise RuntimeError(f"Could not determine FPS for {video_url}: {fps}")
+
+            sample_count = min(num_frames, total_frames)
+            indices = np.rint(
+                np.linspace(0, total_frames - 1, sample_count)
+            ).astype(np.int64).tolist()
+            if len(indices) % 2:
+                indices.append(indices[-1])
+
+            pil_frames = []
+            decoded_indices = []
+            for requested_index in indices:
+                frame_bgr = None
+                actual_index = -1
+                for candidate in range(
+                    requested_index,
+                    max(-1, requested_index - 33),
+                    -1,
+                ):
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, candidate)
+                    ok, candidate_frame = cap.read()
+                    if ok:
+                        frame_bgr = candidate_frame
+                        reported_index = (
+                            int(round(cap.get(cv2.CAP_PROP_POS_FRAMES))) - 1
+                        )
+                        actual_index = (
+                            reported_index if reported_index >= 0 else candidate
+                        )
+                        break
+                if frame_bgr is None:
+                    raise RuntimeError(
+                        f"Could not decode frame {requested_index} or any of the "
+                        f"previous 32 frames from {video_url}"
+                    )
+                if actual_index != requested_index:
+                    eval_logger.warning(
+                        f"Video frame {requested_index} was unavailable; using "
+                        f"nearest decodable frame {actual_index}."
+                    )
+                decoded_indices.append(actual_index)
+                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                pil_frames.append(Image.fromarray(frame_rgb))
+
+            eval_logger.info(
+                "Native LLaVA video frames: "
+                f"path={video_url}, frames={len(pil_frames)}, "
+                f"source_size=({height}, {width}), max_pixels={self.max_pixels}"
+            )
+            return pil_frames, decoded_indices, fps
+        finally:
+            cap.release()
 
     def _get_video_total_frames(self, video_url: str) -> int:
         cap = cv2.VideoCapture(video_url)
