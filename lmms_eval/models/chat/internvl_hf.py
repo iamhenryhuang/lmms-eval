@@ -67,6 +67,7 @@ class InternVLHf(lmms):
         min_patches: int = 1,
         max_patches: int = 12,
         num_frames: int = 32,
+        video_size: int = 448,
         fps: Optional[float] = None,
         trust_remote_code: Optional[bool] = False,
         low_cpu_mem_usage: Optional[bool] = False,
@@ -80,6 +81,9 @@ class InternVLHf(lmms):
         self.min_patches = min_patches
         self.max_patches = max_patches
         self.num_frames = num_frames
+        self.video_size = int(video_size)
+        if self.video_size <= 0:
+            raise ValueError(f"video_size must be positive, but got {self.video_size}.")
         self.fps = fps
 
         batch_size_int = int(batch_size)
@@ -245,6 +249,11 @@ class InternVLHf(lmms):
 
             images_kwargs = {}
             videos_kwargs = {}
+            # InternVL's 0.5 pixel shuffle requires an even patch grid. The
+            # checkpoint's video processor defaults to 384 px (27 patches at
+            # patch size 14), while the vision encoder is trained at 448 px
+            # (32 patches). Force the compatible square input size for video.
+            videos_kwargs["size"] = {"height": self.video_size, "width": self.video_size}
             if self.min_patches is not None:
                 images_kwargs["min_patches"] = self.min_patches
             if self.max_patches is not None:

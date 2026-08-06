@@ -2,6 +2,7 @@ from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import torch
+import transformers.image_utils as transformers_image_utils
 from accelerate import Accelerator, DistributedType
 from decord import VideoReader, cpu
 from loguru import logger as eval_logger
@@ -16,6 +17,15 @@ from lmms_eval import utils
 from lmms_eval.api.instance import Instance
 from lmms_eval.api.model import lmms
 from lmms_eval.api.registry import register_model
+
+
+# VideoLLaMA3's remote processor imports VideoInput from the Transformers 4.x
+# location. Transformers 5 moved it to video_utils, so restore only the moved
+# alias when running in a Transformers 5 environment.
+if not hasattr(transformers_image_utils, "VideoInput"):
+    from transformers.video_utils import VideoInput
+
+    transformers_image_utils.VideoInput = VideoInput
 
 
 @register_model("videollama3")
@@ -53,7 +63,9 @@ class VideoLLaMA3(lmms):
         device_map: Optional[str] = "auto",
         batch_size: Optional[Union[int, str]] = 1,
         use_flash_attention_2: Optional[bool] = True,
+        attn_implementation: Optional[str] = None,
         max_num_frames: int = 180,
+        max_visual_tokens: Optional[int] = None,
         use_custom_video_loader=False,  # True for video-mmmu
         **kwargs,
     ) -> None:
@@ -72,22 +84,23 @@ class VideoLLaMA3(lmms):
             self._device = torch.device(f"cuda:{accelerator.local_process_index}")
             self.device_map = f"cuda:{accelerator.local_process_index}"
 
+        model_kwargs = {
+            "trust_remote_code": True,
+            "device_map": self.device_map,
+            "torch_dtype": torch.bfloat16,
+        }
         if use_flash_attention_2:
-            self._model = AutoModelForCausalLM.from_pretrained(
-                pretrained,
-                trust_remote_code=True,
-                device_map=self.device_map,
-                torch_dtype=torch.bfloat16,
-                attn_implementation="flash_attention_2",
-            )
-        else:
-            self._model = AutoModelForCausalLM.from_pretrained(
-                pretrained,
-                trust_remote_code=True,
-                device_map=self.device_map,
-                torch_dtype=torch.bfloat16,
-            )
+            model_kwargs["attn_implementation"] = "flash_attention_2"
+        elif attn_implementation is not None:
+            model_kwargs["attn_implementation"] = attn_implementation
+
+        self._model = AutoModelForCausalLM.from_pretrained(pretrained, **model_kwargs)
         self.processor = AutoProcessor.from_pretrained(pretrained, trust_remote_code=True)
+        if max_visual_tokens is not None:
+            max_visual_tokens = int(max_visual_tokens)
+            if max_visual_tokens <= 0:
+                raise ValueError("max_visual_tokens must be positive")
+            self.processor.image_processor.max_tokens = max_visual_tokens
         self.tokenizer = self.processor.tokenizer
         self.max_num_frames = max_num_frames
         self.batch_size_per_gpu = int(batch_size)
@@ -186,7 +199,11 @@ class VideoLLaMA3(lmms):
                     visual = visuals[i] if i < len(visuals) else None
                     if isinstance(visual, str) and visual.endswith((".mp4", ".avi", ".mov")):  # Video file
                         if self.use_custom_video_loader:
-                            frames, timestamps = read_video_custom(visual)
+                            frames, timestamps = read_video_custom(
+                                visual,
+                                fps=None,
+                                max_frames_num=self.max_num_frames,
+                            )
                             message.append({"role": "user", "content": [{"type": "video", "video": frames, "timestamps": timestamps, "num_frames": len(timestamps)}, {"type": "text", "text": context}]})
                         else:
                             message.append({"role": "user", "content": [{"type": "video", "video": {"video_path": visual, "fps": 1, "max_frames": self.max_num_frames}}, {"type": "text", "text": context}]})
@@ -200,6 +217,15 @@ class VideoLLaMA3(lmms):
                     else:
                         message.append({"role": "user", "content": [{"type": "text", "text": context}]})
             inputs = self.processor(conversation=message, return_tensors="pt", add_generation_prompt=True)
+
+            if "pixel_values" in inputs:
+                grid_sizes = inputs.get("grid_sizes")
+                eval_logger.info(
+                    "VideoLLaMA3 preprocessing: "
+                    f"max_visual_tokens={self.processor.image_processor.max_tokens}, "
+                    f"pixel_values={tuple(inputs['pixel_values'].shape)}, "
+                    f"grid_sizes={grid_sizes.tolist() if grid_sizes is not None else None}"
+                )
 
             do_sample = gen_kwargs.get("do_sample", False)
             temperature = gen_kwargs.get("temperature", 0.2 if do_sample else 1.0)

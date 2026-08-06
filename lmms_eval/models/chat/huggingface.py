@@ -89,15 +89,21 @@ class Huggingface(lmms):
 
         self.trust_remote_code = trust_remote_code
         config = AutoConfig.from_pretrained(pretrained, trust_remote_code=trust_remote_code)
-        if config.model_type in AutoModelForCausalLM._model_mapping.keys():
-            model_cls = AutoModelForCausalLM
-        elif config.model_type in AutoModelForImageTextToText._model_mapping.keys():
+        config_class = type(config)
+        # Auto-model mappings are keyed by config classes, not model-type
+        # strings. Prefer the multimodal generation class when both mappings
+        # support a model (for example, Gemma 4).
+        if config_class in AutoModelForImageTextToText._model_mapping:
             model_cls = AutoModelForImageTextToText
+        elif config_class in AutoModelForCausalLM._model_mapping:
+            model_cls = AutoModelForCausalLM
         else:
             model_cls = AutoModel
 
         self._model = model_cls.from_pretrained(pretrained, trust_remote_code=trust_remote_code, **model_kwargs).eval()
-        self.max_num_frames = max_num_frames
+        self.max_num_frames = int(max_num_frames)
+        if self.max_num_frames <= 0:
+            raise ValueError(f"max_num_frames must be positive, but got {self.max_num_frames}.")
 
         raw_prompt = reasoning_prompt or system_prompt
         if raw_prompt:
@@ -233,7 +239,15 @@ class Huggingface(lmms):
             images = self.flatten(images)
             videos = self.flatten(videos)
             audios = self.flatten(audios)
-            kwargs = {"images": images, "videos": videos, "audios": audios}
+            kwargs = {}
+            if images:
+                kwargs["images"] = images
+            if videos:
+                kwargs["videos"] = videos
+                kwargs["num_frames"] = self.max_num_frames
+            if audios:
+                # Transformers 5 uses the singular `audio` processor keyword.
+                kwargs["audio"] = audios
             inputs = self.processor(text=texts, padding=True, return_tensors="pt", **kwargs)
 
             if self.device_map == "auto":
