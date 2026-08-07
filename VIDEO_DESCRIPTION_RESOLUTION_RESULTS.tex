@@ -11,9 +11,9 @@
 
 \begin{table}[!htbp]
   \centering
-  \caption{214 支配對 VDC 影片、24 frames：Detailed VDCScore 結果
-    （High = 1920$\times$1080，Low = 432$\times$240；judge 為 Llama-3.1-8B；
-    $p$ 為雙尾 paired $t$-test）}
+  \caption{Detailed VDCScore on 214 paired VDC videos, 24 frames.
+    High = 1920$\times$1080, Low = 432$\times$240; judge = Llama-3.1-8B;
+    $p$ = two-sided paired $t$-test on per-video High$-$Low differences.}
   \label{tab:vdc-resolution-results}
   \resizebox{\textwidth}{!}{%
   \begin{tabular}{lrrrrrrrr}
@@ -47,7 +47,8 @@
 \medskip
 \begin{table}[!htbp]
   \centering
-  \caption{同上表，Per-video 勝負分佈（accuracy，214 支中）}
+  \caption{Per-video outcome for Table~\ref{tab:vdc-resolution-results}
+    (accuracy, out of 214 videos).}
   \label{tab:vdc-resolution-pervideo}
   \resizebox{0.6\textwidth}{!}{%
   \begin{tabular}{lrrr}
@@ -67,10 +68,10 @@
 \end{table}
 
 \noindent
-\textbf{重點：}七個模型中只有 Qwen3-VL-4B 達統計顯著，差距僅 2.37 個百分點，
-換算每支影片（約 19 題 QA）平均多答對半題左右。其餘六個模型皆不顯著，
-per-video 勝負場數接近五五波（如 Gemma 86:87、Qwen2.5-VL 76:80）。
-\textbf{差異不大，且因模型而異。}
+\textbf{重點：}七個模型中只有 Qwen3-VL-4B 的差距通過統計檢定（$p<0.001$），
+但幅度僅 2.37 個百分點——換算每支影片（約 19 題 QA）平均多答對半題左右。
+其餘六個模型測不出顯著差異，逐片勝負場數也接近五五波（如 Gemma 86:87、
+Qwen2.5-VL 76:80）。\textbf{差異不大，且因模型而異。}
 
 \medskip
 \noindent
@@ -84,7 +85,8 @@ $n=7$ 亦不足以做統計檢定，故僅為觀察到的傾向。因各模型�
 \medskip
 \begin{table}[!htbp]
   \centering
-  \caption{同上表，改用過濾後的 Factual QA（4{,}113 題中保留 3{,}225 題）}
+  \caption{Same setup as Table~\ref{tab:vdc-resolution-results}, using
+    factual-filtered QA (3{,}225 of 4{,}113 detailed items retained).}
   \label{tab:vdc-resolution-factual-results}
   \resizebox{\textwidth}{!}{%
   \begin{tabular}{lrrrrrrrr}
@@ -118,7 +120,9 @@ $n=7$ 亦不足以做統計檢定，故僅為觀察到的傾向。因各模型�
 \medskip
 \begin{table}[!htbp]
   \centering
-  \caption{同上表，Per-video 勝負分佈（accuracy，214 支中）}
+  \caption{Per-video outcome for
+    Table~\ref{tab:vdc-resolution-factual-results}
+    (accuracy, out of 214 videos).}
   \label{tab:vdc-resolution-factual-pervideo}
   \resizebox{0.6\textwidth}{!}{%
   \begin{tabular}{lrrr}
@@ -138,10 +142,9 @@ $n=7$ 亦不足以做統計檢定，故僅為觀察到的傾向。因各模型�
 \end{table}
 
 \noindent
-\textbf{重點：}過濾後結論方向不變。Qwen3-VL-4B 顯著性更明確
-（accuracy $p=0.0027$、score $p=0.0015$），Qwen3.5-4B 的 accuracy 亦達顯著
-（$p=0.0288$）。Qwen2.5-VL-7B、Gemma、InternVL、GLM-4.6V-Flash、VideoLLaMA3-7B
-仍不顯著；GLM-4.6V-Flash 的差距在過濾後轉為負值（$-$0.12pp），與 VideoLLaMA3-7B
-同為七個模型中最不受解析度影響的兩個。
+\textbf{重點：}移除主觀、意圖類問題後，結論方向不變。Qwen3-VL-4B 的差距依然
+通過檢定（accuracy $p=0.0027$、score $p=0.0015$），Qwen3.5-4B 的 accuracy 也
+通過（$p=0.0288$）。其餘五個模型仍測不出顯著差異；GLM-4.6V-Flash 過濾後甚至
+轉為負值（$-$0.12 pp）。兩種 QA 版本結論一致，代表結果不是特定題目子集造成的。
 
 \end{document}
